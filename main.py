@@ -6,6 +6,9 @@ import sqlite3
 import tiktoken
 from dotenv import load_dotenv
 import log
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import functools
 
 # setup logger
 logger = log.setup_logger(__name__)
@@ -82,6 +85,14 @@ def save_conversation_history(channel_id, user_id, user_name, message):
    )
    db.commit()
 
+# Wrap call to OpenAI server not to block Discord event handler
+async def create_chat_completion_async(model_engine, conversation_history):
+   loop = asyncio.get_event_loop()
+   with ThreadPoolExecutor() as executor:
+      partial_func = functools.partial(openai.ChatCompletion.create, model=model_engine, messages=conversation_history)
+      response = await loop.run_in_executor(executor, partial_func)
+   return response
+
 # When bot is ready print log information like guilds and users information
 @client.event
 async def on_ready():
@@ -121,11 +132,9 @@ async def on_message(message):
       # Truncate conversation_history if it exceeds the token limit
       conversation_history = truncate_conversation_history(conversation_history, TOKEN_LIMIT, MODEL_ENGINE)
 
+      # Send async request and await response
       logger.info(f'Sending request to OpenAI...')
-      response = openai.ChatCompletion.create(
-         model=MODEL_ENGINE,
-         messages=conversation_history
-      )
+      response = await create_chat_completion_async(MODEL_ENGINE, conversation_history)
       assistant_response = response['choices'][0]['message']['content']
       logger.info(f'Received response from OpenAI: {assistant_response}')
 
